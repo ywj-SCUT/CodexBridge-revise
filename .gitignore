@@ -1,0 +1,21 @@
+.DS_Store
+.codex
+.env
+.env.*
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+.telegram-inbox/
+.codexbridge/
+reports/
+reference/
+
+# Local CodexBridge deployment state
+config/local-weixin.service.env
+*.local.ps1
+/start-weixin-*.cmd
+/install-weixin-service-after-login.cmd
+*.log
