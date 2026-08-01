@@ -7,6 +7,7 @@ import QRCode from 'qrcode';
 import { WeixinAccountStore } from './platforms/weixin/account_store.js';
 import { WEIXIN_DEFAULT_BASE_URL, defaultCodexBridgeStateDir } from './platforms/weixin/config.js';
 import { WeixinPlatformPlugin } from './platforms/weixin/plugin.js';
+import { MobileFilePickerService } from './platforms/weixin/mobile_file_picker_service.js';
 import { DEFAULT_ILINK_BOT_TYPE, officialQrLogin } from './platforms/weixin/official/login.js';
 import { clearContextTokensForAccount } from './platforms/weixin/official/context_tokens.js';
 import { createCodexBridgeRuntime } from './runtime/bootstrap.js';
@@ -235,7 +236,25 @@ async function runWeixinServe(args: string[]) {
     },
   });
   const platformPlugin = runtime.registry.getPlatform('weixin') as WeixinPlatformPlugin;
-  const bridgeRuntime = new WeixinBridgeRuntime({
+  let bridgeRuntime!: WeixinBridgeRuntime;
+  const mobileFilePicker = parseBooleanEnv(process.env.CODEXBRIDGE_MOBILE_UPLOAD_ENABLE, false)
+    ? new MobileFilePickerService({
+      rootDir: path.join(stateDir, 'weixin', 'inbound', 'mobile'),
+      host: normalizeCliString(process.env.CODEXBRIDGE_MOBILE_UPLOAD_HOST) ?? '0.0.0.0',
+      port: parseOptionalNonNegativeInt(process.env.CODEXBRIDGE_MOBILE_UPLOAD_PORT) ?? 43183,
+      publicBaseUrl: normalizeCliString(process.env.CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL),
+      ttlMs: parseOptionalPositiveInt(process.env.CODEXBRIDGE_MOBILE_UPLOAD_TTL_MS) ?? undefined,
+      maxFileBytes: parseOptionalPositiveInt(process.env.CODEXBRIDGE_MOBILE_UPLOAD_MAX_FILE_BYTES) ?? undefined,
+      maxFiles: parseOptionalPositiveInt(process.env.CODEXBRIDGE_MOBILE_UPLOAD_MAX_FILES) ?? undefined,
+      onUpload: async (event) => {
+        await bridgeRuntime.dispatchInboundEvent(event);
+      },
+      onError: async (error) => {
+        process.stderr.write(`[weixin-mobile-upload] ${formatError(error)}\n`);
+      },
+    })
+    : null;
+  bridgeRuntime = new WeixinBridgeRuntime({
     platformPlugin,
     bridgeCoordinator: runtime.services.bridgeCoordinator,
     automationJobs: runtime.services.automationJobs,
@@ -246,6 +265,7 @@ async function runWeixinServe(args: string[]) {
     }) as any,
     locale: i18n.locale,
     streamFinalAnswers: process.env.CODEXBRIDGE_WEIXIN_STREAM_FINAL_ANSWERS !== '0',
+    mobileFilePicker,
   } as any);
   const embeddedNativeApiOptions = resolveEmbeddedCodexNativeApiOptions({
     env: process.env,
@@ -288,6 +308,7 @@ async function runWeixinServe(args: string[]) {
     process.stdout.write(`${i18n.t('cli.serve.stopping', { signal })}\n`);
     try {
       await bridgeRuntime.stop();
+      await mobileFilePicker?.stop().catch(() => {});
       await nativeApi?.stop().catch(() => {});
     } finally {
       await stopRuntimeProviderPlugins(runtime.registry.listProviders());
@@ -311,8 +332,13 @@ async function runWeixinServe(args: string[]) {
       process.stdout.write(`native_api_provider_kind: ${binding.providerKind}\n`);
       process.stdout.write(`native_api_auth_mode: ${embeddedNativeApiOptions.authToken ? i18n.t('common.enabled') : i18n.t('common.disabled')}\n`);
     }
+    if (mobileFilePicker) {
+      const binding = await mobileFilePicker.start();
+      process.stdout.write(`mobile_upload_base_url: ${binding.baseUrl}\n`);
+    }
     await bridgeRuntime.start();
   } finally {
+    await mobileFilePicker?.stop().catch(() => {});
     await nativeApi?.stop().catch(() => {});
     await stopRuntimeProviderPlugins(runtime.registry.listProviders());
     await serveLock.release();
@@ -1033,6 +1059,14 @@ function resolveEmbeddedCodexNativeApiOptions({
 function parseOptionalNonNegativeInt(value: unknown): number | null {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveInt(value: unknown): number | null {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
     return null;
   }
   return parsed;

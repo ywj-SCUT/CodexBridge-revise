@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { WeixinBridgeRuntime } from '../../src/runtime/weixin_bridge_runtime.js';
 import { createI18n } from '../../src/i18n/index.js';
+import type { InboundTextEvent } from '../../src/types/platform.js';
 
 async function withEnvOverride<T>(
   key: string,
@@ -42,6 +43,7 @@ interface RuntimeHarnessOptions {
   inboundAttachmentMergeWindowMs?: number;
   automationPollMs?: number;
   internalThreadCleanupMs?: number;
+  mobileFilePicker?: any;
   pollEvents?: any[];
 }
 
@@ -61,6 +63,7 @@ function makeRuntime({
   inboundAttachmentMergeWindowMs = 3000,
   automationPollMs = 30_000,
   internalThreadCleanupMs = 0,
+  mobileFilePicker = null,
   pollEvents = null,
 }: RuntimeHarnessOptions) {
   return new WeixinBridgeRuntime({
@@ -116,8 +119,45 @@ function makeRuntime({
     inboundAttachmentMergeWindowMs,
     automationPollMs,
     internalThreadCleanupMs,
+    mobileFilePicker,
   });
 }
+
+test('WeixinBridgeRuntime handles /pickfile locally and returns a natural-language upload link', async () => {
+  const sent: Array<{ externalScopeId: string; content: string }> = [];
+  const created: Array<{ scopeId: string; prompt: string | null }> = [];
+  const runtime = makeRuntime({
+    sendText: async (payload) => {
+      sent.push(payload);
+    },
+    coordinator: {
+      async handleInboundEvent() {
+        throw new Error('/pickfile should not reach the coordinator');
+      },
+    },
+    mobileFilePicker: {
+      createUploadSession(event: InboundTextEvent, prompt: string | null) {
+        created.push({ scopeId: event.externalScopeId, prompt });
+        return {
+          url: 'https://upload.example.test/mobile-upload/token',
+          expiresAt: Date.now() + 600_000,
+        };
+      },
+    },
+  });
+
+  const outcome = await runtime.dispatchInboundEvent({
+    platform: 'weixin',
+    externalScopeId: 'wxid_1',
+    text: '/pickfile 总结并比较这些文档',
+  });
+
+  assert.equal(outcome, undefined);
+  assert.deepEqual(created, [{ scopeId: 'wxid_1', prompt: '总结并比较这些文档' }]);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /10 分钟/u);
+  assert.match(sent[0].content, /https:\/\/upload\.example\.test\/mobile-upload\/token/u);
+});
 
 function completeResponse(text: string) {
   return {
@@ -1039,6 +1079,7 @@ test('WeixinBridgeRuntime marks assistant reminders delivered only after success
 });
 
 test('WeixinBridgeRuntime prefers supervision-backed agent scheduling and does not double-dispatch the same mission', async () => {
+  await withEnvOverride('CODEXBRIDGE_ENABLE_AGENT_COMMAND', '1', async () => {
   const dispatched: string[] = [];
   let releaseAgentRun: (() => void) | null = null;
   const agentRunGate = new Promise<void>((resolve) => {
@@ -1086,6 +1127,7 @@ test('WeixinBridgeRuntime prefers supervision-backed agent scheduling and does n
 
   releaseAgentRun?.();
   await runtime.waitForIdle();
+  });
 });
 
 test('WeixinBridgeRuntime skips agent supervision when the command is disabled', async () => {
@@ -1125,6 +1167,7 @@ test('WeixinBridgeRuntime skips agent supervision when the command is disabled',
 });
 
 test('WeixinBridgeRuntime proactively delivers package-backed agent loop notifications per host policy without duplicating terminal replies', async () => {
+  await withEnvOverride('CODEXBRIDGE_ENABLE_AGENT_COMMAND', '1', async () => {
   const sent: Array<{ externalScopeId: string; content: string }> = [];
   const job = {
     id: 'agent-loop-notify-1',
@@ -1232,6 +1275,7 @@ test('WeixinBridgeRuntime proactively delivers package-backed agent loop notific
       content: 'Mission completed.',
     },
   ]);
+  });
 });
 
 test('WeixinBridgeRuntime sends artifact-based response messages through platform sendMedia', async () => {

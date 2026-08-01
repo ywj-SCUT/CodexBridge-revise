@@ -92,6 +92,13 @@ interface BridgeCoordinatorLike {
   cleanupInternalProviderThreads?(params?: { dryRun?: boolean; limit?: number }): Promise<unknown>;
 }
 
+interface MobileFilePickerLike {
+  createUploadSession(event: InboundTextEvent, prompt?: string | null): {
+    url: string;
+    expiresAt: number;
+  };
+}
+
 interface StreamState {
   lastObservedFinal: string;
   pendingPreview: string;
@@ -150,6 +157,7 @@ interface WeixinBridgeRuntimeOptions {
   inboundAttachmentMergeWindowMs?: number;
   automationPollMs?: number;
   internalThreadCleanupMs?: number;
+  mobileFilePicker?: MobileFilePickerLike | null;
   locale?: string | null;
 }
 
@@ -218,6 +226,8 @@ export class WeixinBridgeRuntime {
 
   internalThreadCleanupInFlight: Promise<void> | null;
 
+  mobileFilePicker: MobileFilePickerLike | null;
+
   constructor({
     platformPlugin,
     bridgeCoordinator,
@@ -233,6 +243,7 @@ export class WeixinBridgeRuntime {
     inboundAttachmentMergeWindowMs = 3000,
     automationPollMs = 30_000,
     internalThreadCleanupMs = 24 * 60 * 60 * 1000,
+    mobileFilePicker = null,
     locale = null,
   }) {
     this.platformPlugin = platformPlugin;
@@ -249,6 +260,7 @@ export class WeixinBridgeRuntime {
     this.inboundAttachmentMergeWindowMs = inboundAttachmentMergeWindowMs;
     this.automationPollMs = automationPollMs;
     this.internalThreadCleanupMs = internalThreadCleanupMs;
+    this.mobileFilePicker = mobileFilePicker;
     this.i18n = createI18n(locale);
     this.poller = null;
     this.backgroundTasks = new Set();
@@ -330,6 +342,10 @@ export class WeixinBridgeRuntime {
     const command = parseSlashCommand(String(event?.text ?? ''));
     if (command) {
       await this.flushPendingInboundMerge(event.externalScopeId);
+      if (command.name === 'pickfile' || command.name === 'pf') {
+        await this.handleMobileFilePickerCommand(event, command.args.join(' '));
+        return undefined;
+      }
       if (shouldScheduleSlashCommand(command)) {
         const task = this.processInboundEventWithOptions(event, { deferPostResponseAction: true }).catch(async (error) => {
           await this.onError(error);
@@ -355,6 +371,29 @@ export class WeixinBridgeRuntime {
       type: 'scheduled',
       completion: task,
     };
+  }
+
+  async handleMobileFilePickerCommand(event: InboundTextEvent, prompt: string | null = null): Promise<void> {
+    if (!this.mobileFilePicker) {
+      await this.sendTextWithRetry({
+        externalScopeId: event.externalScopeId,
+        content: '手机文件选择服务尚未启用。',
+      });
+      return;
+    }
+    try {
+      const session = this.mobileFilePicker.createUploadSession(event, prompt);
+      await this.sendTextWithRetry({
+        externalScopeId: event.externalScopeId,
+        content: `请在 10 分钟内打开链接，从“微信聊天文档”选择文件：\n${session.url}`,
+      });
+    } catch (error) {
+      await this.onError(error);
+      await this.sendTextWithRetry({
+        externalScopeId: event.externalScopeId,
+        content: '手机文件选择服务暂时不可用，请稍后重试。',
+      });
+    }
   }
 
   async waitForIdle(): Promise<void> {

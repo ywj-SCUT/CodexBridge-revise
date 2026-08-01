@@ -49,6 +49,8 @@ CodexBridge 是一个以 Codex 为执行核心的聊天平台桥接器。当前�
 - Codex 生成的文件和图片可以通过微信 CDN 上传并发送回手机
 - 图片压缩、视频信息探测和缩略图生成使用项目管理的 `ffmpeg`/`ffprobe`
 - 默认单个入站媒体上限为 100 MiB；出站产物默认最多 3 个、单个最多 25 MiB
+- 支持在微信发送 `/pickfile`，打开一次性链接后从 Android“微信聊天文档”选择文件
+- 手机选择页将文件流式上传到当前微信会话，不需要先下载到手机的普通下载目录再重新发送
 
 ### 自动化和个人助手
 
@@ -70,6 +72,8 @@ CodexBridge 是一个以 Codex 为执行核心的聊天平台桥接器。当前�
 ```mermaid
 flowchart LR
     A["个人微信"] -->|iLink 长轮询| B["微信平台适配器"]
+    A -->|一次性签名链接 / Android SAF| H["手机文件选择接口"]
+    H -->|本地附件事件| C
     B -->|消息与附件标准化| C["WeixinBridgeRuntime"]
     C -->|会话路由、命令、审批| D["BridgeCoordinator"]
     D -->|JSON-RPC / app-server| E["Codex"]
@@ -382,6 +386,24 @@ bash ./scripts/service/logs-launchd-user.sh --follow
 
 文件任务可以直接把文件投递给机器人，然后补充自然语言要求。附件到达后会先保存在运行 CodexBridge 的电脑或服务器，再作为 Codex 输入处理；微信手机端收到的是桥接器重新上传的结果文件，并不是 Codex 直接写入手机文件系统。
 
+### 从“微信聊天文档”选择文件
+
+在机器人会话发送：
+
+```text
+/pickfile
+```
+
+也可以直接附带处理要求：
+
+```text
+/pickfile 总结这些文件并生成一份中文报告
+```
+
+机器人会返回一个 10 分钟有效的一次性链接。在 Android 手机打开链接，点击文件选择框，进入系统文件选择器的“微信聊天文档”，选中文件并上传。上传完成后，文件会绑定到发起命令的微信会话并自动交给 Codex。简写命令为 `/pf`。
+
+局域网使用时配置 `CODEXBRIDGE_MOBILE_UPLOAD_ENABLE=1` 即可。跨网络使用时，应通过 HTTPS 反向代理或隧道发布端口 `43183`，并把公开地址写入 `CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL`。服务使用随机令牌、过期时间、一次性提交、文件名净化、数量限制和大小限制；它只读取用户在手机系统选择器中主动选择的文件。
+
 ## 状态与数据目录
 
 默认状态目录：
@@ -395,6 +417,7 @@ bash ./scripts/service/logs-launchd-user.sh --follow
 ```text
 weixin/accounts/            微信账户和 context token
 weixin/inbound/             从微信下载并解密的入站附件
+weixin/inbound/mobile/      手机文件选择页上传的附件
 weixin/login/               登录二维码
 runtime/                    会话绑定、设置、自动化和运行状态
 assistant/attachments/      个人助手记录附件
