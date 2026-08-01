@@ -1,0 +1,7 @@
+.page { padding: 48rpx 36rpx; }
+.title { margin-bottom: 24rpx; font-size: 42rpx; font-weight: 600; }
+.status { min-height: 88rpx; margin-bottom: 32rpx; color: #555; line-height: 1.6; }
+.status.ok { color: #07883f; }
+.status.error { color: #c62828; }
+.primary { border-radius: 12rpx; background: #07c160; color: #fff; }
+.primary[disabled] { background: #a9dcbc; color: #fff; }

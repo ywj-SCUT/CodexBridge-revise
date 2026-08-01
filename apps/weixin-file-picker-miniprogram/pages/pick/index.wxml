@@ -1,0 +1,7 @@
+<view class="page">
+  <view class="title">把聊天文件交给 Codex</view>
+  <view class="status {{statusKind}}">{{status}}</view>
+  <button class="primary" bindtap="chooseAndUpload" loading="{{busy}}" disabled="{{busy || !ready}}">
+    从微信聊天选择
+  </button>
+</view>

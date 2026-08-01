@@ -1,0 +1,10 @@
+{
+  "appid": "YOUR_MINIPROGRAM_APPID",
+  "projectname": "codexbridge-weixin-file-picker",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "setting": {
+    "es6": true,
+    "urlCheck": true
+  }
+}

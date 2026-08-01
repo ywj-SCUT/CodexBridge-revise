@@ -14,6 +14,10 @@ async function createTestService(options: {
   ttlMs?: number;
   maxFileBytes?: number;
   maxFiles?: number;
+  miniProgramUrlTemplate?: string;
+  miniProgramAppId?: string;
+  miniProgramAppSecret?: string;
+  miniProgramApiBaseUrl?: string;
 } = {}) {
   const rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'codexbridge-mobile-picker-'));
   let resolveEvent: ((event: InboundTextEvent) => void) | null = null;
@@ -49,10 +53,10 @@ function createWeixinEvent(): InboundTextEvent {
   };
 }
 
-test('mobile file picker renders Android SAF page and submits selected files to the originating WeChat scope', async () => {
+test('mobile file picker renders an explicit system picker fallback and submits selected files to the originating WeChat scope', async () => {
   const harness = await createTestService();
   try {
-    const link = harness.service.createUploadSession(createWeixinEvent(), '总结这个文件');
+    const link = await harness.service.createUploadSession(createWeixinEvent(), '总结这个文件');
     assert.match(link.url, /^http:\/\/127\.0\.0\.1:\d+\/mobile-upload\/[a-f0-9]{64}$/u);
 
     const page = await fetch(link.url);
@@ -60,7 +64,8 @@ test('mobile file picker renders Android SAF page and submits selected files to 
     const html = await page.text();
     assert.match(html, /type="file"/u);
     assert.match(html, /multiple/u);
-    assert.match(html, /微信聊天文档/u);
+    assert.match(html, /系统文件选择器回退页面/u);
+    assert.equal(link.picker, 'system_file_picker');
 
     const body = Buffer.from('hello from mobile');
     const upload = await fetch(`${link.url}/files?name=${encodeURIComponent('报告.txt')}`, {
@@ -126,7 +131,7 @@ test('mobile file picker expires tokens and rejects unknown tokens', async () =>
   let now = 1_000;
   const harness = await createTestService({ now: () => now, ttlMs: 50 });
   try {
-    const link = harness.service.createUploadSession(createWeixinEvent());
+    const link = await harness.service.createUploadSession(createWeixinEvent());
     now += 51;
     assert.equal((await fetch(link.url)).status, 410);
     const unknownUrl = link.url.replace(/[a-f0-9]{64}$/u, 'f'.repeat(64));
@@ -139,7 +144,7 @@ test('mobile file picker expires tokens and rejects unknown tokens', async () =>
 test('mobile file picker sanitizes traversal filenames and keeps files inside its root', async () => {
   const harness = await createTestService();
   try {
-    const link = harness.service.createUploadSession(createWeixinEvent());
+    const link = await harness.service.createUploadSession(createWeixinEvent());
     const upload = await fetch(`${link.url}/files?name=${encodeURIComponent('..\\..\\secret.txt')}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain' },
@@ -159,7 +164,7 @@ test('mobile file picker sanitizes traversal filenames and keeps files inside it
 test('mobile file picker enforces file size and count limits', async () => {
   const harness = await createTestService({ maxFileBytes: 4, maxFiles: 1 });
   try {
-    const link = harness.service.createUploadSession(createWeixinEvent());
+    const link = await harness.service.createUploadSession(createWeixinEvent());
     const tooLarge = await fetch(`${link.url}/files?name=large.txt`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain' },
@@ -200,7 +205,7 @@ test('mobile file picker keeps the token retryable when bridge event delivery fa
   });
   await service.start();
   try {
-    const link = service.createUploadSession(createWeixinEvent());
+    const link = await service.createUploadSession(createWeixinEvent());
     assert.equal((await fetch(`${link.url}/files?name=retry.txt`, {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain' },
@@ -214,5 +219,43 @@ test('mobile file picker keeps the token retryable when bridge event delivery fa
   } finally {
     await service.stop();
     await fsp.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('mobile file picker accepts wx.uploadFile multipart payloads and marks the source as WeChat chat files', async () => {
+  const harness = await createTestService();
+  try {
+    const link = await harness.service.createUploadSession(createWeixinEvent());
+    const boundary = '----codexbridge-test';
+    const body = Buffer.from([
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="chat-report.txt"\r\nContent-Type: text/plain\r\n\r\n`,
+      'hello from wx.uploadFile\r\n',
+      `--${boundary}--\r\n`,
+    ].join(''), 'utf8');
+    const upload = await fetch(`${link.url}/files?name=${encodeURIComponent('聊天报告.txt')}`, {
+      method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) },
+      body,
+    });
+    assert.equal(upload.status, 201);
+    assert.equal((await fetch(`${link.url}/complete`, { method: 'POST' })).status, 202);
+    const event = await harness.receivedEvent;
+    assert.equal((event.metadata?.mobileFilePicker as any)?.source, 'wechat_message_file');
+    assert.equal(event.attachments?.[0].fileName, '聊天报告.txt');
+    assert.deepEqual(await fsp.readFile(event.attachments?.[0].localPath ?? ''), Buffer.from('hello from wx.uploadFile'));
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('mobile file picker can return a configured mini program entry point with the upload session URL', async () => {
+  const harness = await createTestService({ miniProgramUrlTemplate: 'https://mini.example/pick?uploadUrl={uploadUrl}' });
+  try {
+    const link = await harness.service.createUploadSession(createWeixinEvent());
+    assert.equal(link.picker, 'wechat_chat_file_picker');
+    assert.match(link.url, /^https:\/\/mini\.example\/pick\?uploadUrl=http%3A%2F%2F127\.0\.0\.1%3A\d+%2Fmobile-upload%2F[a-f0-9]{64}$/u);
+    assert.match(link.fallbackUrl ?? '', /\/mobile-upload\/[a-f0-9]{64}$/u);
+  } finally {
+    await harness.dispose();
   }
 });

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import Busboy from 'busboy';
 import type { InboundAttachment, InboundAttachmentKind, InboundTextEvent } from '../../types/platform.js';
 import { getMimeFromFilename } from './official/media/mime.js';
 
@@ -32,6 +33,7 @@ interface UploadSession {
   files: UploadedFile[];
   activeUploads: number;
   completed: boolean;
+  source: 'android_saf' | 'wechat_message_file';
 }
 
 export interface MobileFilePickerBinding {
@@ -43,6 +45,8 @@ export interface MobileFilePickerBinding {
 export interface MobileFilePickerSessionLink {
   url: string;
   expiresAt: number;
+  picker: 'system_file_picker' | 'wechat_chat_file_picker';
+  fallbackUrl?: string;
 }
 
 export interface MobileFilePickerServiceOptions {
@@ -52,6 +56,10 @@ export interface MobileFilePickerServiceOptions {
   host?: string;
   port?: number;
   publicBaseUrl?: string | null;
+  miniProgramUrlTemplate?: string | null;
+  miniProgramAppId?: string | null;
+  miniProgramAppSecret?: string | null;
+  miniProgramApiBaseUrl?: string | null;
   ttlMs?: number;
   maxFileBytes?: number;
   maxFiles?: number;
@@ -65,6 +73,10 @@ export class MobileFilePickerService {
   private readonly host: string;
   private readonly requestedPort: number;
   private readonly configuredPublicBaseUrl: string | null;
+  private readonly miniProgramUrlTemplate: string | null;
+  private readonly miniProgramAppId: string | null;
+  private readonly miniProgramAppSecret: string | null;
+  private readonly miniProgramApiBaseUrl: string;
   private readonly ttlMs: number;
   private readonly maxFileBytes: number;
   private readonly maxFiles: number;
@@ -72,6 +84,7 @@ export class MobileFilePickerService {
   private readonly sessions = new Map<string, UploadSession>();
   private server: Server | null = null;
   private binding: MobileFilePickerBinding | null = null;
+  private miniProgramAccessToken: { value: string; expiresAt: number } | null = null;
 
   constructor({
     rootDir,
@@ -80,6 +93,10 @@ export class MobileFilePickerService {
     host = DEFAULT_HOST,
     port = DEFAULT_PORT,
     publicBaseUrl = null,
+    miniProgramUrlTemplate = null,
+    miniProgramAppId = null,
+    miniProgramAppSecret = null,
+    miniProgramApiBaseUrl = 'https://api.weixin.qq.com',
     ttlMs = DEFAULT_TTL_MS,
     maxFileBytes = DEFAULT_MAX_FILE_BYTES,
     maxFiles = DEFAULT_MAX_FILES,
@@ -91,6 +108,13 @@ export class MobileFilePickerService {
     this.host = host.trim() || DEFAULT_HOST;
     this.requestedPort = normalizeNonNegativeInteger(port, DEFAULT_PORT);
     this.configuredPublicBaseUrl = normalizeBaseUrl(publicBaseUrl);
+    this.miniProgramUrlTemplate = normalizeMiniProgramUrlTemplate(miniProgramUrlTemplate);
+    this.miniProgramAppId = normalizeOptionalString(miniProgramAppId);
+    this.miniProgramAppSecret = normalizeOptionalString(miniProgramAppSecret);
+    this.miniProgramApiBaseUrl = normalizeBaseUrl(miniProgramApiBaseUrl) ?? 'https://api.weixin.qq.com';
+    if (Boolean(this.miniProgramAppId) !== Boolean(this.miniProgramAppSecret)) {
+      throw new Error('Mini program AppID and AppSecret must be configured together.');
+    }
     this.ttlMs = normalizePositiveInteger(ttlMs, DEFAULT_TTL_MS);
     this.maxFileBytes = normalizePositiveInteger(maxFileBytes, DEFAULT_MAX_FILE_BYTES);
     this.maxFiles = normalizePositiveInteger(maxFiles, DEFAULT_MAX_FILES);
@@ -152,7 +176,7 @@ export class MobileFilePickerService {
     return this.binding ? { ...this.binding } : null;
   }
 
-  createUploadSession(event: InboundTextEvent, prompt: string | null = null): MobileFilePickerSessionLink {
+  async createUploadSession(event: InboundTextEvent, prompt: string | null = null): Promise<MobileFilePickerSessionLink> {
     if (!this.binding) {
       throw new Error('Mobile file picker service is not started.');
     }
@@ -170,11 +194,73 @@ export class MobileFilePickerService {
       files: [],
       activeUploads: 0,
       completed: false,
+      source: 'android_saf',
     });
+    const fallbackUrl = `${this.binding.baseUrl}/mobile-upload/${token}`;
+    if (this.miniProgramAppId && this.miniProgramAppSecret) {
+      try {
+        return {
+          url: await this.createMiniProgramUrlLink(fallbackUrl),
+          fallbackUrl,
+          expiresAt,
+          picker: 'wechat_chat_file_picker',
+        };
+      } catch (error) {
+        this.sessions.delete(token);
+        await this.onError(error);
+        throw error;
+      }
+    }
+    if (this.miniProgramUrlTemplate) {
+      return {
+        url: this.miniProgramUrlTemplate.replaceAll('{uploadUrl}', encodeURIComponent(fallbackUrl)),
+        fallbackUrl,
+        expiresAt,
+        picker: 'wechat_chat_file_picker',
+      };
+    }
     return {
-      url: `${this.binding.baseUrl}/mobile-upload/${token}`,
+      url: fallbackUrl,
       expiresAt,
+      picker: 'system_file_picker',
     };
+  }
+
+  private async createMiniProgramUrlLink(uploadUrl: string): Promise<string> {
+    const accessToken = await this.getMiniProgramAccessToken();
+    const response = await fetch(`${this.miniProgramApiBaseUrl}/wxa/generate_urllink?access_token=${encodeURIComponent(accessToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: 'pages/pick/index',
+        query: `uploadUrl=${encodeURIComponent(uploadUrl)}`,
+        expire_type: 1,
+        expire_interval: 1,
+      }),
+    });
+    const body = await readWeixinApiResponse(response);
+    if (!response.ok || body.errcode || typeof body.url_link !== 'string' || !body.url_link) {
+      throw new Error(`WeChat mini program URL Link generation failed: ${body.errmsg ?? response.status}`);
+    }
+    return body.url_link;
+  }
+
+  private async getMiniProgramAccessToken(): Promise<string> {
+    if (this.miniProgramAccessToken && this.miniProgramAccessToken.expiresAt > this.now() + 60_000) {
+      return this.miniProgramAccessToken.value;
+    }
+    const url = new URL('/cgi-bin/token', this.miniProgramApiBaseUrl);
+    url.searchParams.set('grant_type', 'client_credential');
+    url.searchParams.set('appid', this.miniProgramAppId!);
+    url.searchParams.set('secret', this.miniProgramAppSecret!);
+    const response = await fetch(url);
+    const body = await readWeixinApiResponse(response);
+    if (!response.ok || body.errcode || typeof body.access_token !== 'string' || !body.access_token) {
+      throw new Error(`WeChat mini program access token request failed: ${body.errmsg ?? response.status}`);
+    }
+    const expiresInMs = normalizePositiveInteger(body.expires_in, 7200) * 1000;
+    this.miniProgramAccessToken = { value: body.access_token, expiresAt: this.now() + expiresInMs };
+    return body.access_token;
   }
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -204,11 +290,15 @@ export class MobileFilePickerService {
       await this.receiveFile(request, response, url, session);
       return;
     }
+    if (request.method === 'POST' && action === 'files') {
+      await this.receiveMiniProgramFile(request, response, url, session);
+      return;
+    }
     if (request.method === 'POST' && action === 'complete') {
       await this.completeSession(response, session);
       return;
     }
-    response.setHeader('Allow', action === 'page' ? 'GET' : action === 'files' ? 'PUT' : 'POST');
+    response.setHeader('Allow', action === 'page' ? 'GET' : action === 'files' ? 'PUT, POST' : 'POST');
     sendJson(response, 405, { ok: false, error: '请求方法不受支持。' });
   }
 
@@ -264,6 +354,83 @@ export class MobileFilePickerService {
     }
   }
 
+  private async receiveMiniProgramFile(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    session: UploadSession,
+  ): Promise<void> {
+    if (session.files.length + session.activeUploads >= this.maxFiles) {
+      sendJson(response, 409, { ok: false, error: `每次最多选择 ${this.maxFiles} 个文件。` });
+      return;
+    }
+    if (!String(request.headers['content-type'] ?? '').toLowerCase().startsWith('multipart/form-data;')) {
+      sendJson(response, 415, { ok: false, error: '小程序上传必须使用 multipart/form-data。' });
+      return;
+    }
+
+    await fsp.mkdir(session.directory, { recursive: true });
+    session.activeUploads += 1;
+    let localPath: string | null = null;
+    try {
+      const parser = Busboy({
+        headers: request.headers,
+        limits: { files: 1, fileSize: this.maxFileBytes, fields: 4, parts: 5 },
+      });
+      let uploadedFile: UploadedFile | null = null;
+      let fileWrite: Promise<void> | null = null;
+      let fileLimitReached = false;
+
+      parser.on('file', (fieldName, file, info) => {
+        if (fieldName !== 'file' || fileWrite) {
+          file.resume();
+          return;
+        }
+        const originalName = normalizeUploadedFileName(url.searchParams.get('name') ?? info.filename);
+        const mimeType = normalizeMimeType(info.mimeType, originalName);
+        const extension = path.extname(originalName).slice(0, 20);
+        localPath = path.join(session.directory, `${crypto.randomUUID()}${extension}`);
+        file.on('limit', () => {
+          fileLimitReached = true;
+        });
+        const limiter = new ByteLimitTransform(this.maxFileBytes);
+        fileWrite = pipeline(file, limiter, fs.createWriteStream(localPath, { flags: 'wx' }))
+          .then(() => {
+            if (fileLimitReached || file.truncated) throw new UploadTooLargeError();
+            uploadedFile = { localPath: localPath!, fileName: originalName, mimeType, sizeBytes: limiter.bytesRead };
+          });
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        parser.once('error', reject);
+        parser.once('close', resolve);
+        request.pipe(parser);
+      });
+      if (!fileWrite) {
+        sendJson(response, 400, { ok: false, error: '上传请求中没有文件。' });
+        return;
+      }
+      await fileWrite;
+      if (!uploadedFile) throw new Error('Mini program upload did not produce a file.');
+      session.files.push(uploadedFile);
+      session.source = 'wechat_message_file';
+      sendJson(response, 201, {
+        ok: true,
+        fileName: uploadedFile.fileName,
+        sizeBytes: uploadedFile.sizeBytes,
+      });
+    } catch (error) {
+      if (localPath) await fsp.rm(localPath, { force: true }).catch(() => {});
+      if (error instanceof UploadTooLargeError) {
+        sendJson(response, 413, { ok: false, error: '文件超过大小限制。' });
+        return;
+      }
+      throw error;
+    } finally {
+      session.activeUploads -= 1;
+    }
+  }
+
   private async completeSession(response: ServerResponse, session: UploadSession): Promise<void> {
     if (session.activeUploads > 0) {
       sendJson(response, 409, { ok: false, error: '文件仍在上传，请稍候。' });
@@ -281,7 +448,7 @@ export class MobileFilePickerService {
       metadata: {
         ...(session.event.metadata ?? {}),
         mobileFilePicker: {
-          source: 'android_saf',
+          source: session.source,
           uploadedAt: this.now(),
           fileCount: session.files.length,
         },
@@ -387,12 +554,33 @@ function normalizePrompt(value: string | null): string {
   return String(value ?? '').trim() || DEFAULT_PROMPT;
 }
 
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  return String(value ?? '').trim() || null;
+}
+
+async function readWeixinApiResponse(response: Response): Promise<Record<string, any>> {
+  try {
+    return await response.json() as Record<string, any>;
+  } catch {
+    return {};
+  }
+}
+
 function normalizeBaseUrl(value: string | null | undefined): string | null {
   const normalized = String(value ?? '').trim().replace(/\/+$/u, '');
   if (!normalized) return null;
   const parsed = new URL(normalized);
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('Mobile file picker public URL must use HTTP or HTTPS.');
+  }
+  return normalized;
+}
+
+function normalizeMiniProgramUrlTemplate(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return null;
+  if (!normalized.includes('{uploadUrl}')) {
+    throw new Error('Mini program URL template must contain {uploadUrl}.');
   }
   return normalized;
 }
@@ -484,7 +672,7 @@ body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;backgrou
 </head>
 <body><main>
 <h1>选择要交给 Codex 的文件</h1>
-<p>在系统文件选择器中打开“微信聊天文档”，选择文件后上传。最多 ${maxFiles} 个，单个不超过 ${maxMiB} MiB。</p>
+<p>这是系统文件选择器回退页面，不会显示微信聊天列表。请选择手机上已有的文件后上传。最多 ${maxFiles} 个，单个不超过 ${maxMiB} MiB。</p>
 <label class="picker"><input id="files" type="file" multiple></label>
 <button id="upload" type="button">上传并发送给 Codex</button>
 <div id="status" role="status"></div>

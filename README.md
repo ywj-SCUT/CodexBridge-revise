@@ -49,7 +49,7 @@ CodexBridge 是一个以 Codex 为执行核心的聊天平台桥接器。当前�
 - Codex 生成的文件和图片可以通过微信 CDN 上传并发送回手机
 - 图片压缩、视频信息探测和缩略图生成使用项目管理的 `ffmpeg`/`ffprobe`
 - 默认单个入站媒体上限为 100 MiB；出站产物默认最多 3 个、单个最多 25 MiB
-- 支持在微信发送 `/pickfile`，打开一次性链接后从 Android“微信聊天文档”选择文件
+- 支持在微信发送 `/pickfile`；配置配套小程序后调用微信原生聊天文件选择器，未配置时明确回退到系统文件选择器
 - 手机选择页将文件流式上传到当前微信会话，不需要先下载到手机的普通下载目录再重新发送
 
 ### 自动化和个人助手
@@ -400,9 +400,11 @@ bash ./scripts/service/logs-launchd-user.sh --follow
 /pickfile 总结这些文件并生成一份中文报告
 ```
 
-机器人会返回一个 10 分钟有效的一次性链接。在 Android 手机打开链接，点击文件选择框，进入系统文件选择器的“微信聊天文档”，选中文件并上传。上传完成后，文件会绑定到发起命令的微信会话并自动交给 Codex。简写命令为 `/pf`。
+机器人会返回一个 10 分钟有效的一次性链接。配置 `apps/weixin-file-picker-miniprogram` 后，链接进入微信小程序，点击“从微信聊天选择”会调用 `wx.chooseMessageFile` 打开微信原生“选择一个聊天”界面，再进入该聊天选择文件。上传完成后，文件会绑定到发起命令的微信会话并自动交给 Codex。简写命令为 `/pf`。
 
-局域网使用时配置 `CODEXBRIDGE_MOBILE_UPLOAD_ENABLE=1` 即可。跨网络使用时，应通过 HTTPS 反向代理或隧道发布端口 `43183`，并把公开地址写入 `CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL`。服务使用随机令牌、过期时间、一次性提交、文件名净化、数量限制和大小限制；它只读取用户在手机系统选择器中主动选择的文件。
+普通 H5 的 `<input type="file">` 只能打开 Android 系统文件选择器，无法打开微信原生聊天列表。未配置小程序时，`/pickfile` 会明确返回系统文件选择回退链接，不再把它描述为“微信聊天文档”。小程序部署和域名配置见 `apps/weixin-file-picker-miniprogram/README.md`。
+
+局域网系统选择回退模式配置 `CODEXBRIDGE_MOBILE_UPLOAD_ENABLE=1` 即可。微信聊天选择器真机使用时，需要通过 HTTPS 反向代理发布端口 `43183`，把公开地址写入 `CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL`，并配置 `CODEXBRIDGE_MOBILE_UPLOAD_MINIPROGRAM_APP_ID` 与 `CODEXBRIDGE_MOBILE_UPLOAD_MINIPROGRAM_APP_SECRET`。服务使用随机令牌、过期时间、一次性提交、文件名净化、数量限制和大小限制；它只读取用户主动选择的文件。
 
 该接口的短时随机 Token、固定上传目录、大小限制和自动失效设计参考了 [NousResearch/hermes-agent #532](https://github.com/NousResearch/hermes-agent/issues/532) 的 `/upload` 方案；移动端到桌面数据桥接方向参考了 [chainlesschain/chainlesschain](https://github.com/chainlesschain/chainlesschain/)。本项目没有引入其运行时依赖，而是按 CodexBridge 的微信会话与附件事件模型实现。
 

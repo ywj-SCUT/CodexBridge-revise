@@ -93,9 +93,16 @@ interface BridgeCoordinatorLike {
 }
 
 interface MobileFilePickerLike {
-  createUploadSession(event: InboundTextEvent, prompt?: string | null): {
+  createUploadSession(event: InboundTextEvent, prompt?: string | null): Promise<{
     url: string;
     expiresAt: number;
+    picker?: 'system_file_picker' | 'wechat_chat_file_picker';
+    fallbackUrl?: string;
+  }> | {
+    url: string;
+    expiresAt: number;
+    picker?: 'system_file_picker' | 'wechat_chat_file_picker';
+    fallbackUrl?: string;
   };
 }
 
@@ -382,10 +389,13 @@ export class WeixinBridgeRuntime {
       return;
     }
     try {
-      const session = this.mobileFilePicker.createUploadSession(event, prompt);
+      const session = await this.mobileFilePicker.createUploadSession(event, prompt);
+      const instruction = session.picker === 'wechat_chat_file_picker'
+        ? '打开链接后点击“从微信聊天选择”，选择聊天和文件'
+        : '当前未配置微信小程序，打开链接后只能从手机系统文件目录选择文件';
       await this.sendTextWithRetry({
         externalScopeId: event.externalScopeId,
-        content: `请在 10 分钟内打开链接，从“微信聊天文档”选择文件：\n${session.url}`,
+        content: `请在 10 分钟内${instruction}：\n${session.url}`,
       });
     } catch (error) {
       await this.onError(error);

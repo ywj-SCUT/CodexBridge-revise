@@ -1,0 +1,9 @@
+{
+  "pages": ["pages/pick/index"],
+  "window": {
+    "navigationBarTitleText": "选择微信文件",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f6f7"
+  }
+}

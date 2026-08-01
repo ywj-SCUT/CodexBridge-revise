@@ -141,6 +141,7 @@ test('WeixinBridgeRuntime handles /pickfile locally and returns a natural-langua
         return {
           url: 'https://upload.example.test/mobile-upload/token',
           expiresAt: Date.now() + 600_000,
+          picker: 'wechat_chat_file_picker' as const,
         };
       },
     },
@@ -156,6 +157,7 @@ test('WeixinBridgeRuntime handles /pickfile locally and returns a natural-langua
   assert.deepEqual(created, [{ scopeId: 'wxid_1', prompt: '总结并比较这些文档' }]);
   assert.equal(sent.length, 1);
   assert.match(sent[0].content, /10 分钟/u);
+  assert.match(sent[0].content, /从微信聊天选择/u);
   assert.match(sent[0].content, /https:\/\/upload\.example\.test\/mobile-upload\/token/u);
 });
 
