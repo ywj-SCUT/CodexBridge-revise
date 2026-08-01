@@ -2252,6 +2252,45 @@ test('completed provider results release the local active turn even when thread 
   assert.equal(runtime.services.activeTurns.resolveScopeTurn(scopeRef), null);
 });
 
+test('commentary-only completed conversation turns continue once and return the recovered final answer', async () => {
+  const { runtime, openai } = makeRuntime();
+  const originalStartTurn = openai.startTurn.bind(openai);
+  const inputTexts: string[] = [];
+
+  openai.startTurn = async (args) => {
+    inputTexts.push(args.inputText);
+    if (inputTexts.length === 1) {
+      return {
+        outputText: '当前：正在核对信息。',
+        outputState: 'partial',
+        previewText: '当前：正在核对信息。',
+        finalSource: 'commentary_only',
+        status: 'completed',
+        turnId: 'turn-commentary-only',
+        threadId: args.bridgeSession.codexThreadId,
+        title: args.bridgeSession.title,
+      };
+    }
+    return originalStartTurn(args);
+  };
+
+  const result = await runtime.services.bridgeCoordinator.handleInboundEvent({
+    platform: 'weixin',
+    externalScopeId: 'wx-user-commentary-recovery-1',
+    text: '比较两个模型',
+  });
+
+  assert.deepEqual(inputTexts, [
+    '比较两个模型',
+    '继续完成上一条请求。不要重复进度或计划，完成必要步骤后直接给出最终答案。',
+  ]);
+  assert.equal(
+    result.messages[0]?.text ?? '',
+    'openai: 继续完成上一条请求。不要重复进度或计划，完成必要步骤后直接给出最终答案。',
+  );
+  assert.equal(result.meta?.codexTurn?.outputState, 'complete');
+});
+
 test('conversation turns remain blocked when the previous provider turn is still running', async () => {
   const { runtime, openai } = makeRuntime();
   const scopeRef = {

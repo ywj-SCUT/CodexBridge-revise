@@ -1935,7 +1935,7 @@ export class CodexAppClient extends EventEmitter {
               outputText: previewText,
               outputArtifacts: [],
               outputMedia: [],
-              outputState: sawTerminalNotification ? 'complete' : 'partial',
+              outputState: sawTerminalNotification && Boolean(progressState.finalAnswerText) ? 'complete' : 'partial',
               previewText: progressState.finalAnswerText,
               finalSource: progressState.finalAnswerText ? 'progress_only' : 'commentary_only',
               status: sawTerminalNotification ? 'completed' : null,

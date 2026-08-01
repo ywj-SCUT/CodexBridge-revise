@@ -267,6 +267,7 @@ async function runWeixinServe(args: string[]) {
       process.stderr.write(`[weixin] ${formatError(error)}\n`);
     }) as any,
     locale: i18n.locale,
+    streamCommentary: process.env.CODEXBRIDGE_WEIXIN_STREAM_COMMENTARY === '1',
     streamFinalAnswers: process.env.CODEXBRIDGE_WEIXIN_STREAM_FINAL_ANSWERS !== '0',
     mobileFilePicker,
   } as any);

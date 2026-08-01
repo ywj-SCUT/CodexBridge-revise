@@ -38,6 +38,7 @@ interface RuntimeHarnessOptions {
   commitSyncCursor?: (syncCursor: string) => Promise<void> | void;
   previewSoftTargetBytes?: number;
   previewIntervalMs?: number;
+  streamCommentary?: boolean;
   streamFinalAnswers?: boolean;
   typingKeepaliveMs?: number;
   inboundAttachmentMergeWindowMs?: number;
@@ -58,6 +59,7 @@ function makeRuntime({
   commitSyncCursor,
   previewSoftTargetBytes = 1,
   previewIntervalMs = 0,
+  streamCommentary = false,
   streamFinalAnswers = true,
   typingKeepaliveMs = 8000,
   inboundAttachmentMergeWindowMs = 3000,
@@ -114,6 +116,7 @@ function makeRuntime({
     assistantRecords,
     previewSoftTargetBytes,
     previewIntervalMs,
+    streamCommentary,
     streamFinalAnswers,
     typingKeepaliveMs,
     inboundAttachmentMergeWindowMs,
@@ -352,6 +355,7 @@ test('WeixinBridgeRuntime runs /review in the background so the immediate progre
   });
   const runtime = makeRuntime({
     previewSoftTargetBytes: 1024,
+    streamCommentary: true,
     sendText: async ({ externalScopeId, content }) => {
       sent.push({ externalScopeId, content });
     },
@@ -1606,6 +1610,7 @@ test('WeixinBridgeRuntime merges commentary and final-answer progress into the p
       sent.push({ externalScopeId, content });
     },
     previewSoftTargetBytes: 1024,
+    streamCommentary: true,
     coordinator: {
       async handleInboundEvent(_event: any, options: any = {}) {
         await options.onProgress?.({
@@ -1670,6 +1675,7 @@ test('WeixinBridgeRuntime suppresses identical repeated commentary preview delta
       sent.push({ externalScopeId, content });
     },
     previewSoftTargetBytes: 1024,
+    streamCommentary: true,
     coordinator: {
       async handleInboundEvent(_event: any, options: any = {}) {
         await options.onProgress?.({
@@ -1692,6 +1698,32 @@ test('WeixinBridgeRuntime suppresses identical repeated commentary preview delta
   assert.deepEqual(sent, [
     { externalScopeId: 'wxid_1', content: '先检查。' },
     { externalScopeId: 'wxid_1', content: '最终答案。' },
+  ]);
+});
+
+test('WeixinBridgeRuntime suppresses commentary by default and sends only the final answer', async () => {
+  const sent: Array<{ externalScopeId: string; content: string }> = [];
+  const runtime = makeRuntime({
+    sendText: async ({ externalScopeId, content }) => {
+      sent.push({ externalScopeId, content });
+    },
+    previewSoftTargetBytes: 1024,
+    coordinator: {
+      async handleInboundEvent(_event: any, options: any = {}) {
+        await options.onProgress?.({
+          text: '当前：正在检查。',
+          delta: '当前：正在检查。',
+          outputKind: 'commentary',
+        });
+        return completeResponse('这是完整的最终答案。');
+      },
+    },
+  });
+
+  await runtime.runOnce();
+
+  assert.deepEqual(sent, [
+    { externalScopeId: 'wxid_1', content: '这是完整的最终答案。' },
   ]);
 });
 

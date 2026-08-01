@@ -159,6 +159,7 @@ interface WeixinBridgeRuntimeOptions {
   previewSoftTargetBytes?: number;
   previewHardLimitBytes?: number;
   previewIntervalMs?: number;
+  streamCommentary?: boolean;
   streamFinalAnswers?: boolean;
   typingKeepaliveMs?: number;
   inboundAttachmentMergeWindowMs?: number;
@@ -190,6 +191,8 @@ export class WeixinBridgeRuntime {
   previewHardLimitBytes: number;
 
   previewIntervalMs: number;
+
+  streamCommentary: boolean;
 
   streamFinalAnswers: boolean;
 
@@ -245,6 +248,7 @@ export class WeixinBridgeRuntime {
     previewSoftTargetBytes = 2048,
     previewHardLimitBytes = 2048,
     previewIntervalMs = 3000,
+    streamCommentary = false,
     streamFinalAnswers = true,
     typingKeepaliveMs = WeixinBridgeRuntime.DEFAULT_TYPING_KEEPALIVE_MS,
     inboundAttachmentMergeWindowMs = 3000,
@@ -262,6 +266,7 @@ export class WeixinBridgeRuntime {
     this.previewSoftTargetBytes = previewSoftTargetBytes;
     this.previewHardLimitBytes = previewHardLimitBytes;
     this.previewIntervalMs = previewIntervalMs;
+    this.streamCommentary = streamCommentary;
     this.streamFinalAnswers = streamFinalAnswers;
     this.typingKeepaliveMs = typingKeepaliveMs;
     this.inboundAttachmentMergeWindowMs = inboundAttachmentMergeWindowMs;
@@ -707,6 +712,7 @@ export class WeixinBridgeRuntime {
     if (
       !progress
       || !['commentary', 'final_answer'].includes(progress.outputKind)
+      || (progress.outputKind === 'commentary' && !this.streamCommentary)
       || (progress.outputKind === 'final_answer' && !this.streamFinalAnswers)
       || streamState.streamingDisabled
       || streamState.previewStopped

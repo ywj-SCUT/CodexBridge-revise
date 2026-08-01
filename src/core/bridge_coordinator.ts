@@ -1226,7 +1226,36 @@ export class BridgeCoordinator {
       if (!isAutomationEvent(effectiveEvent)) {
         this.storeRetryableRequest(session.id, effectiveEvent);
       }
-      const { result, session: nextSession } = await this.startTurnWithRecovery(scopeRef, session, effectiveEvent, options);
+      let { result, session: nextSession } = await this.startTurnWithRecovery(scopeRef, session, effectiveEvent, options);
+      if (
+        result?.outputState === 'partial'
+        && result?.finalSource === 'commentary_only'
+        && result?.status === 'completed'
+      ) {
+        debugCoordinator('conversation_turn_commentary_only_recovery', {
+          platform: scopeRef.platform,
+          scopeId: scopeRef.externalScopeId,
+          bridgeSessionId: nextSession?.id ?? session.id,
+          threadId: nextSession?.codexThreadId ?? session.codexThreadId,
+          turnId: result?.turnId ?? null,
+          commentaryPreview: truncateCoordinatorText(result?.previewText, 160),
+        });
+        const recoveryEvent: InboundTextEvent = {
+          ...effectiveEvent,
+          text: '继续完成上一条请求。不要重复进度或计划，完成必要步骤后直接给出最终答案。',
+          attachments: [],
+          metadata: {
+            ...(effectiveEvent.metadata ?? {}),
+            codexBridgeCommentaryOnlyRecovery: true,
+          },
+        };
+        ({ result, session: nextSession } = await this.startTurnWithRecovery(
+          scopeRef,
+          nextSession ?? session,
+          recoveryEvent,
+          options,
+        ));
+      }
       debugCoordinator('conversation_turn_result', {
         platform: scopeRef.platform,
         scopeId: scopeRef.externalScopeId,
