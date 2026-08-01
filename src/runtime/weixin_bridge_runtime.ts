@@ -196,6 +196,12 @@ export class WeixinBridgeRuntime {
 
   scopeChains: Map<string, Promise<RuntimeResponse>>;
 
+  typingGenerations: Map<string, number>;
+
+  typingDeliveryChains: Map<string, Promise<void>>;
+
+  nextTypingGeneration: number;
+
   pendingInboundMerges: Map<string, PendingInboundMerge>;
 
   pendingScopeNotices: Map<string, PendingScopeNotice>;
@@ -249,6 +255,9 @@ export class WeixinBridgeRuntime {
     this.scheduledAgentJobIds = new Set();
     this.scheduledAssistantReminderIds = new Set();
     this.scopeChains = new Map();
+    this.typingGenerations = new Map();
+    this.typingDeliveryChains = new Map();
+    this.nextTypingGeneration = 0;
     this.pendingInboundMerges = new Map();
     this.pendingScopeNotices = new Map();
     this.recentScopeNotices = new Map();
@@ -530,12 +539,9 @@ export class WeixinBridgeRuntime {
       attachmentCount: Array.isArray(event?.attachments) ? event.attachments.length : 0,
     });
     const suppressTyping = Boolean(options.suppressTyping);
-    const typingStart = suppressTyping
-      ? Promise.resolve()
-      : this.safeSendTyping(event.externalScopeId, 'start');
-    const stopTypingKeepalive = suppressTyping
-      ? async () => {}
-      : this.startTypingKeepalive(event.externalScopeId);
+    const typingSession = suppressTyping
+      ? null
+      : this.startTypingSession(event.externalScopeId);
     try {
       const response = await this.bridgeCoordinator.handleInboundEvent(event, {
         onProgress: async (progress) => {
@@ -640,8 +646,7 @@ export class WeixinBridgeRuntime {
       }
       return response;
     } finally {
-      await typingStart;
-      await stopTypingKeepalive();
+      await typingSession?.stop();
     }
   }
 
@@ -1020,19 +1025,48 @@ export class WeixinBridgeRuntime {
     }
   }
 
-  startTypingKeepalive(externalScopeId: string): () => Promise<void> {
-    if (typeof this.platformPlugin.sendTyping !== 'function' || this.typingKeepaliveMs <= 0) {
-      return async () => {
-        await this.safeSendTyping(externalScopeId, 'stop');
-      };
-    }
-    const timer = setInterval(() => {
-      void this.safeSendTyping(externalScopeId, 'start');
-    }, this.typingKeepaliveMs);
-    return async () => {
-      clearInterval(timer);
-      await this.safeSendTyping(externalScopeId, 'stop');
+  startTypingSession(externalScopeId: string): { stop: () => Promise<void> } {
+    const generation = ++this.nextTypingGeneration;
+    this.typingGenerations.set(externalScopeId, generation);
+    void this.enqueueTypingDelivery(externalScopeId, 'start', generation);
+    const timer = typeof this.platformPlugin.sendTyping === 'function' && this.typingKeepaliveMs > 0
+      ? setInterval(() => {
+        void this.enqueueTypingDelivery(externalScopeId, 'start', generation);
+      }, this.typingKeepaliveMs)
+      : null;
+    return {
+      stop: async () => {
+        if (timer) {
+          clearInterval(timer);
+        }
+        if (this.typingGenerations.get(externalScopeId) !== generation) {
+          return;
+        }
+        this.typingGenerations.delete(externalScopeId);
+        await this.enqueueTypingDelivery(externalScopeId, 'stop');
+      },
     };
+  }
+
+  enqueueTypingDelivery(
+    externalScopeId: string,
+    status: 'start' | 'stop',
+    generation: number | null = null,
+  ): Promise<void> {
+    const previous = this.typingDeliveryChains.get(externalScopeId) ?? Promise.resolve();
+    const delivery = previous.catch(() => {}).then(async () => {
+      if (status === 'start' && this.typingGenerations.get(externalScopeId) !== generation) {
+        return;
+      }
+      await this.safeSendTyping(externalScopeId, status);
+    });
+    this.typingDeliveryChains.set(externalScopeId, delivery);
+    void delivery.finally(() => {
+      if (this.typingDeliveryChains.get(externalScopeId) === delivery) {
+        this.typingDeliveryChains.delete(externalScopeId);
+      }
+    });
+    return delivery;
   }
 
   async sendTextWithRetry({
@@ -1546,8 +1580,7 @@ export class WeixinBridgeRuntime {
   async processAgentJobEvent(event: InboundTextEvent, job: any): Promise<RuntimeResponse> {
     await this.flushPendingScopeNotice(event.externalScopeId);
     const streamState = createStreamState();
-    const typingStart = this.safeSendTyping(event.externalScopeId, 'start');
-    const stopTypingKeepalive = this.startTypingKeepalive(event.externalScopeId);
+    const typingSession = this.startTypingSession(event.externalScopeId);
     try {
       const response = await this.bridgeCoordinator.runAgentJob?.(job, {
         onProgress: async (progress) => {
@@ -1579,8 +1612,7 @@ export class WeixinBridgeRuntime {
       }
       return response;
     } finally {
-      await typingStart;
-      await stopTypingKeepalive();
+      await typingSession.stop();
     }
   }
 

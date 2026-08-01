@@ -226,6 +226,50 @@ test('WeixinBridgeRuntime keeps sending typing notifications while a long-runnin
   assert.equal(typing.filter((entry) => entry.status === 'start').length >= 2, true);
 });
 
+test('WeixinBridgeRuntime does not resume stale typing keepalives after stop finishes', async () => {
+  const typing: Array<{ externalScopeId: string; status: 'start' | 'stop' }> = [];
+  let finishLongTurn: ((response: any) => void) | null = null;
+  const runtime = makeRuntime({
+    typingKeepaliveMs: 5,
+    sendText: async () => {},
+    sendTyping: async ({ externalScopeId, status }) => {
+      typing.push({ externalScopeId, status });
+    },
+    coordinator: {
+      async handleInboundEvent(event: any) {
+        if (event.text === '/stop') {
+          return completeResponse('stop requested');
+        }
+        return new Promise((resolve) => {
+          finishLongTurn = resolve;
+        });
+      },
+    },
+  });
+
+  const longTurn = runtime.handleInboundEvent({
+    platform: 'weixin',
+    externalScopeId: 'wxid_1',
+    text: 'long task',
+  } as any);
+  await new Promise((resolve) => setTimeout(resolve, 8));
+  await runtime.dispatchInboundEvent({
+    platform: 'weixin',
+    externalScopeId: 'wxid_1',
+    text: '/stop',
+  } as any);
+
+  const startCountAfterStop = typing.filter((entry) => entry.status === 'start').length;
+  assert.equal(typing.at(-1)?.status, 'stop');
+  await new Promise((resolve) => setTimeout(resolve, 16));
+  assert.equal(typing.filter((entry) => entry.status === 'start').length, startCountAfterStop);
+  assert.equal(typing.at(-1)?.status, 'stop');
+
+  finishLongTurn?.(completeResponse('done'));
+  await longTurn;
+  assert.equal(typing.at(-1)?.status, 'stop');
+});
+
 test('WeixinBridgeRuntime does not deadlock when the first final preview delta has no sentence boundary', async () => {
   const sent: Array<{ externalScopeId: string; content: string }> = [];
   const runtime = makeRuntime({
