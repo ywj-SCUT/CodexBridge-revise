@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   MobileFilePickerService,
+  resolveAdvertisedHost,
 } from '../../../src/platforms/weixin/mobile_file_picker_service.js';
 import type { InboundTextEvent } from '../../../src/types/platform.js';
 
@@ -87,6 +88,38 @@ test('mobile file picker renders Android SAF page and submits selected files to 
   } finally {
     await harness.dispose();
   }
+});
+
+test('mobile file picker advertises a physical LAN address ahead of WSL and VMware adapters', () => {
+  const interfaces = {
+    'vEthernet (WSL)': [{
+      address: '172.24.240.1',
+      netmask: '255.255.240.0',
+      family: 'IPv4' as const,
+      mac: '00:00:00:00:00:01',
+      internal: false,
+      cidr: '172.24.240.1/20',
+    }],
+    'VMware Network Adapter VMnet8': [{
+      address: '192.168.186.1',
+      netmask: '255.255.255.0',
+      family: 'IPv4' as const,
+      mac: '00:00:00:00:00:02',
+      internal: false,
+      cidr: '192.168.186.1/24',
+    }],
+    WLAN: [{
+      address: '192.168.1.5',
+      netmask: '255.255.255.0',
+      family: 'IPv4' as const,
+      mac: '00:00:00:00:00:03',
+      internal: false,
+      cidr: '192.168.1.5/24',
+    }],
+  };
+
+  assert.equal(resolveAdvertisedHost('0.0.0.0', interfaces), '192.168.1.5');
+  assert.equal(resolveAdvertisedHost('127.0.0.1', interfaces), '127.0.0.1');
 });
 
 test('mobile file picker expires tokens and rejects unknown tokens', async () => {

@@ -393,18 +393,43 @@ function normalizeBaseUrl(value: string | null | undefined): string | null {
   return normalized;
 }
 
-function resolveAdvertisedHost(bindHost: string): string {
+export function resolveAdvertisedHost(
+  bindHost: string,
+  interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]> = os.networkInterfaces(),
+): string {
   if (!['0.0.0.0', '::', '::0'].includes(bindHost)) {
     return bindHost.includes(':') ? `[${bindHost}]` : bindHost;
   }
-  for (const addresses of Object.values(os.networkInterfaces())) {
+  const candidates: Array<{ address: string; score: number }> = [];
+  for (const [interfaceName, addresses] of Object.entries(interfaces)) {
     for (const address of addresses ?? []) {
       if (address.family === 'IPv4' && !address.internal) {
-        return address.address;
+        candidates.push({
+          address: address.address,
+          score: scoreNetworkAddress(interfaceName, address.address),
+        });
       }
     }
   }
-  return '127.0.0.1';
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0]?.address ?? '127.0.0.1';
+}
+
+function scoreNetworkAddress(interfaceName: string, address: string): number {
+  const name = interfaceName.toLowerCase();
+  let score = 0;
+  if (/wlan|wi-?fi|wireless|ethernet|以太网|无线/u.test(name)) score += 100;
+  if (/wsl|vmware|virtual|vethernet|hyper-v|docker|loopback/u.test(name)) score -= 100;
+  if (/^192\.168\./u.test(address)) score += 30;
+  else if (/^10\./u.test(address)) score += 20;
+  else if (isPrivate172Address(address)) score += 10;
+  return score;
+}
+
+function isPrivate172Address(address: string): boolean {
+  const match = /^172\.(\d+)\./u.exec(address);
+  const secondOctet = match ? Number.parseInt(match[1], 10) : -1;
+  return secondOctet >= 16 && secondOctet <= 31;
 }
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
