@@ -355,7 +355,7 @@ export class WeixinPlatformPlugin implements Pick<PlatformPluginContract, 'id' |
     attachments: InboundAttachment[];
     errors: string[];
   }> {
-    const itemList = Array.isArray(payload.item_list) ? payload.item_list : [];
+    const itemList = flattenInboundItems(Array.isArray(payload.item_list) ? payload.item_list : []);
     const attachments: InboundAttachment[] = [];
     const errors: string[] = [];
     for (const item of itemList) {
@@ -848,17 +848,30 @@ export function resolveWeixinScope(message: WeixinInboundPayload, accountId: str
 }
 
 export function extractText(itemList: MessageItem[]) {
-  for (const item of itemList) {
+  const flattenedItems = flattenInboundItems(itemList);
+  for (const item of flattenedItems) {
     if (Number(item?.type) === MessageItemType.TEXT) {
       return stringValue(item?.text_item?.text) ?? '';
     }
   }
-  for (const item of itemList) {
+  for (const item of flattenedItems) {
     if (Number(item?.type) === MessageItemType.VOICE) {
       return stringValue(item?.voice_item?.text) ?? '';
     }
   }
   return '';
+}
+
+function flattenInboundItems(itemList: MessageItem[]): MessageItem[] {
+  const flattened: MessageItem[] = [];
+  for (const item of itemList) {
+    flattened.push(item);
+    const referencedItem = item?.ref_msg?.message_item;
+    if (referencedItem) {
+      flattened.push(...flattenInboundItems([referencedItem]));
+    }
+  }
+  return flattened;
 }
 
 function isMediaItem(item: MessageItem) {
@@ -1003,10 +1016,14 @@ function buildInboundDedupeKey(payload: WeixinInboundPayload) {
 }
 
 function buildInboundItemFingerprint(item: MessageItem): string {
+  const referencedItem = item?.ref_msg?.message_item;
+  const referencedFingerprint = referencedItem
+    ? `:ref:${buildInboundItemFingerprint(referencedItem)}`
+    : '';
   const type = Number(item?.type ?? 0);
   switch (type) {
     case MessageItemType.TEXT:
-      return `text:${stringValue(item?.text_item?.text) ?? ''}`;
+      return `text:${stringValue(item?.text_item?.text) ?? ''}${referencedFingerprint}`;
     case MessageItemType.IMAGE:
       return `image:${stringValue(item?.image_item?.media?.full_url)
         ?? stringValue(item?.image_item?.media?.encrypt_query_param)
@@ -1027,7 +1044,7 @@ function buildInboundItemFingerprint(item: MessageItem): string {
         ?? stringValue(item?.video_item?.media?.encrypt_query_param)
         ?? ''}`;
     default:
-      return `type:${type}`;
+      return `type:${type}${referencedFingerprint}`;
   }
 }
 

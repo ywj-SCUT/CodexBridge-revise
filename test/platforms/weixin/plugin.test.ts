@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { WeixinAccountStore } from '../../../src/platforms/weixin/account_store.js';
 import { loadWeixinConfig } from '../../../src/platforms/weixin/config.js';
+import { encryptAesEcb } from '../../../src/platforms/weixin/official/cdn/aes_ecb.js';
 import { _resetContextTokenStoreForTest } from '../../../src/platforms/weixin/official/context_tokens.js';
 import { _resetSessionGuardForTest } from '../../../src/platforms/weixin/official/session_guard.js';
 import { WeixinPlatformPlugin } from '../../../src/platforms/weixin/plugin.js';
@@ -220,6 +221,71 @@ test('WeixinPlatformPlugin downloads inbound image messages into local attachmen
     assert.equal(event?.attachments?.[0]?.kind, 'image');
     assert.equal(fs.existsSync(String(event?.attachments?.[0]?.localPath ?? '')), true);
     assert.equal(event?.metadata?.weixin?.attachmentCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('WeixinPlatformPlugin downloads a file nested in a referenced message', async () => {
+  const rootDir = makeTempAccountsDir();
+  const plugin = makePlugin({
+    accountStore: new WeixinAccountStore({ rootDir }),
+    config: {
+      enabled: true,
+      accountId: 'bot-account',
+      token: 'token',
+      baseUrl: 'https://ilinkai.weixin.qq.com',
+      cdnBaseUrl: 'https://novac2c.cdn.weixin.qq.com/c2c',
+      dmPolicy: 'open',
+      groupPolicy: 'disabled',
+      allowFrom: [],
+      groupAllowFrom: [],
+      stateDir: path.dirname(path.dirname(rootDir)),
+      accountsDir: rootDir,
+      maxMessageLength: 4000,
+    },
+  });
+
+  const aesKey = Buffer.alloc(16, 7);
+  const encryptedFile = encryptAesEcb(Buffer.from('{"ok":true}'), aesKey);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input) !== 'https://cdn.example.com/report.json') {
+      throw new Error(`unexpected media url: ${String(input)}`);
+    }
+    return new Response(encryptedFile, { status: 200 });
+  }) as typeof globalThis.fetch;
+
+  try {
+    const event = await plugin.normalizeInboundEvent({
+      from_user_id: 'wxid_sender',
+      to_user_id: 'bot-account',
+      msg_type: 0,
+      message_id: 'msg-ref-file-1',
+      item_list: [{
+        type: 1,
+        text_item: { text: '请分析这个文件' },
+        ref_msg: {
+          title: 'report.json',
+          message_item: {
+            type: 4,
+            file_item: {
+              file_name: 'report.json',
+              media: {
+                full_url: 'https://cdn.example.com/report.json',
+                aes_key: aesKey.toString('base64'),
+              },
+            },
+          },
+        },
+      }],
+    });
+
+    assert.equal(event?.text, '请分析这个文件');
+    assert.equal(event?.attachments?.length, 1);
+    assert.equal(event?.attachments?.[0]?.kind, 'file');
+    assert.equal(event?.attachments?.[0]?.fileName, 'report.json');
+    assert.equal(fs.readFileSync(String(event?.attachments?.[0]?.localPath), 'utf8'), '{"ok":true}');
   } finally {
     globalThis.fetch = originalFetch;
   }
