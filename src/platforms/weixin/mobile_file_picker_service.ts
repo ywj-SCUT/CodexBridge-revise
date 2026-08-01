@@ -274,7 +274,6 @@ export class MobileFilePickerService {
       return;
     }
     session.completed = true;
-    this.sessions.delete(session.token);
     const event: InboundTextEvent = {
       ...cloneInboundEvent(session.event),
       text: session.prompt,
@@ -288,10 +287,15 @@ export class MobileFilePickerService {
         },
       },
     };
-    sendJson(response, 202, { ok: true, fileCount: session.files.length });
-    Promise.resolve(this.onUpload(event)).catch(async (error) => {
+    try {
+      await this.onUpload(event);
+      this.sessions.delete(session.token);
+      sendJson(response, 202, { ok: true, fileCount: session.files.length });
+    } catch (error) {
+      session.completed = false;
       await this.onError(error);
-    });
+      sendJson(response, 503, { ok: false, error: '桥接暂时未接收文件，请重试提交。' });
+    }
   }
 
   private cleanupExpiredSessions(): void {

@@ -183,3 +183,36 @@ test('mobile file picker enforces file size and count limits', async () => {
     await harness.dispose();
   }
 });
+
+test('mobile file picker keeps the token retryable when bridge event delivery fails', async () => {
+  const rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'codexbridge-mobile-picker-retry-'));
+  let deliveryAttempts = 0;
+  const service = new MobileFilePickerService({
+    rootDir,
+    host: '127.0.0.1',
+    port: 0,
+    async onUpload() {
+      deliveryAttempts += 1;
+      if (deliveryAttempts === 1) {
+        throw new Error('temporary dispatch failure');
+      }
+    },
+  });
+  await service.start();
+  try {
+    const link = service.createUploadSession(createWeixinEvent());
+    assert.equal((await fetch(`${link.url}/files?name=retry.txt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'retry',
+    })).status, 201);
+
+    assert.equal((await fetch(`${link.url}/complete`, { method: 'POST' })).status, 503);
+    assert.equal((await fetch(`${link.url}/complete`, { method: 'POST' })).status, 202);
+    assert.equal(deliveryAttempts, 2);
+    assert.equal((await fetch(link.url)).status, 410);
+  } finally {
+    await service.stop();
+    await fsp.rm(rootDir, { recursive: true, force: true });
+  }
+});

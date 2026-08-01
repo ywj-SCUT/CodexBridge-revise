@@ -404,6 +404,8 @@ bash ./scripts/service/logs-launchd-user.sh --follow
 
 局域网使用时配置 `CODEXBRIDGE_MOBILE_UPLOAD_ENABLE=1` 即可。跨网络使用时，应通过 HTTPS 反向代理或隧道发布端口 `43183`，并把公开地址写入 `CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL`。服务使用随机令牌、过期时间、一次性提交、文件名净化、数量限制和大小限制；它只读取用户在手机系统选择器中主动选择的文件。
 
+该接口的短时随机 Token、固定上传目录、大小限制和自动失效设计参考了 [NousResearch/hermes-agent #532](https://github.com/NousResearch/hermes-agent/issues/532) 的 `/upload` 方案；移动端到桌面数据桥接方向参考了 [chainlesschain/chainlesschain](https://github.com/chainlesschain/chainlesschain/)。本项目没有引入其运行时依赖，而是按 CodexBridge 的微信会话与附件事件模型实现。
+
 ## 状态与数据目录
 
 默认状态目录：
