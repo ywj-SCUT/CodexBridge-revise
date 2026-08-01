@@ -29,7 +29,7 @@ It borrows the most useful CLI help conventions while staying chat-friendly:
 - `/helps` shows the full command catalog
 - `/helps <command>` shows one command in detail
 - every slash command supports `-h`, `--help`, `-help`, and `-helps`
-- every slash command also supports a short alias such as `/h`, `/st`, `/us`, `/lg`, `/sp`, `/rv`, `/sk`, `/n`, `/up`, `/as`, `/td`, `/rmd`, `/nt`, `/pd`, `/ms`, `/m`, `/psn`, `/ins`, `/th`, `/se`, `/nx`, `/pv`, `/o`, `/pk`, `/rn`, `/perm`, `/al`, `/dn`, `/rc`, `/rt`, and `/rs`
+- every slash command also supports a short alias such as `/h`, `/st`, `/us`, `/lg`, `/sp`, `/rv`, `/sk`, `/n`, `/up`, `/pf`, `/as`, `/td`, `/rmd`, `/nt`, `/pd`, `/ms`, `/m`, `/psn`, `/ins`, `/th`, `/se`, `/nx`, `/pv`, `/o`, `/pk`, `/rn`, `/perm`, `/al`, `/dn`, `/rc`, `/rt`, and `/rs`
 - `/lang` and `/lang <zh|en>` to switch reply language for this scope (higher priority than env).
 - thread browsing is index-first on WeChat, so `/open 2` is preferred over copying raw thread ids
 - before the bot reaches roughly 10 consecutive replies, the user can proactively send a single `/` to break the WeChat-side frequency limit; it is swallowed by the bridge, not forwarded to Codex, and does not create a reply
@@ -44,6 +44,8 @@ It borrows the most useful CLI help conventions while staying chat-friendly:
 /login
 /lg
 /login list
+/pickfile
+/pickfile 总结这些文件并生成中文报告
 /review
 /rv
 /review base main
@@ -190,6 +192,26 @@ Examples:
 ```text
 /stop
 /sp
+```
+
+### `/pickfile` and `/pf`
+
+Create a short-lived, single-use mobile upload link for the current WeChat chat.
+Open the link on Android, choose files from the system file picker's “WeChat chat documents” provider, and submit them directly to the current Codex session.
+
+- the default link lifetime is 10 minutes
+- the default limit is 5 files and 100 MiB per file
+- text after the command becomes the Codex instruction for the selected files
+- files are stored under `~/.codexbridge/weixin/inbound/mobile/`
+- LAN links require the phone and bridge host to be reachable on the same network
+- remote use requires an HTTPS reverse proxy or tunnel plus `CODEXBRIDGE_MOBILE_UPLOAD_PUBLIC_BASE_URL`
+
+Examples:
+
+```text
+/pickfile
+/pf
+/pickfile 对比这些合同并列出差异
 ```
 
 ### `/review` and `/rv`
